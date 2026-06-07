@@ -4,54 +4,234 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>WebAR Kampus Cibiru</title>
-  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe.min.js"></script>
+  <script>
+    if (typeof AFRAME === 'undefined') {
+      document.write('<script src="https://unpkg.com/aframe@1.5.0/dist/aframe.min.js"><\/script>');
+    }
+  </script>
+  <script>
+    function registerComponents() {
+      if (typeof AFRAME === 'undefined') { return setTimeout(registerComponents, 50); }
+      if (AFRAME.components['ar-controller']) { return; }
+
+      // Billboard: entity selalu menghadap kamera
+      AFRAME.registerComponent('billboard', {
+        tick: function () {
+          const cam = this.el.sceneEl.camera;
+          if (!cam) return;
+          const camPos = new THREE.Vector3();
+          cam.getWorldPosition(camPos);
+          const objPos = new THREE.Vector3();
+          this.el.object3D.getWorldPosition(objPos);
+          // hanya putar di sumbu Y supaya label tetap tegak
+          const dx = camPos.x - objPos.x;
+          const dz = camPos.z - objPos.z;
+          this.el.object3D.rotation.y = Math.atan2(dx, dz);
+        }
+      });
+
+      AFRAME.registerComponent('ar-controller', {
+        init: function () {
+          this.hitTestSource = null;
+          this.viewerSpace = null;
+          this.refSpace = null;
+          this.reticle = document.querySelector('#reticle');
+          this.hint = document.querySelector('#hint');
+          this.btn = document.querySelector('#enter');
+          this.popup = document.querySelector('#popup');
+          this.popupTitle = document.querySelector('#popup-title');
+          this.popupBody = document.querySelector('#popup-body');
+          const sceneEl = this.el;
+
+          // data tiap titik (bisa kamu tambah)
+          this.places = [
+            { name: 'Gedung A', info: 'Gedung Perkuliahan Utama. Berisi ruang kelas lantai 1-3 dan aula.' },
+            { name: 'Perpustakaan', info: 'Perpustakaan kampus, buka 08.00-16.00 setiap hari kerja.' },
+            { name: 'Masjid', info: 'Masjid kampus dengan kapasitas 300 jamaah.' }
+          ];
+          this.placeIndex = 0;
+
+          if (!navigator.xr) {
+            this.hint.textContent = 'Browser tidak mendukung WebXR. Pakai Chrome Android terbaru.';
+            this.btn.disabled = true;
+          } else {
+            navigator.xr.isSessionSupported('immersive-ar').then((ok) => {
+              if (!ok) {
+                this.hint.textContent = 'AR tidak didukung. Pastikan Google Play Services for AR (ARCore) terpasang.';
+                this.btn.disabled = true;
+              }
+            });
+          }
+
+          this.btn.addEventListener('click', () => {
+            this.hint.textContent = 'Memulai AR…';
+            const p = sceneEl.enterAR ? sceneEl.enterAR() : sceneEl.enterVR();
+            if (p && p.catch) p.catch((err) => {
+              this.btn.style.display = '';
+              this.hint.textContent = 'Gagal memulai AR: ' + (err && err.message ? err.message : err);
+            });
+          });
+
+          // tutup popup
+          document.querySelector('#popup-close').addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.popup.style.display = 'none';
+          });
+
+          sceneEl.renderer.xr.addEventListener('sessionstart', async () => {
+            this.btn.style.display = 'none';
+            const session = sceneEl.renderer.xr.getSession();
+            this.viewerSpace = await session.requestReferenceSpace('viewer');
+            this.refSpace = await session.requestReferenceSpace('local-floor');
+            this.hitTestSource = await session.requestHitTestSource({ space: this.viewerSpace });
+            this.hint.textContent = 'Arahkan ke lantai, lalu tap untuk menaruh objek';
+            session.addEventListener('select', () => this.onSelect());
+          });
+
+          sceneEl.renderer.xr.addEventListener('sessionend', () => {
+            this.hitTestSource = null;
+            this.reticle.setAttribute('visible', false);
+            this.btn.style.display = '';
+            this.popup.style.display = 'none';
+          });
+        },
+
+        onSelect: function () {
+          // cek dulu apakah jari mengenai label (raycast dari tengah layar)
+          const hitLabel = this.raycastLabel();
+          if (hitLabel) {
+            this.showPopup(hitLabel);
+            return;
+          }
+          if (this.reticle.getAttribute('visible')) {
+            this.placeObject();
+          }
+        },
+
+        raycastLabel: function () {
+          const cam = this.el.sceneEl.camera;
+          const ray = new THREE.Raycaster();
+          ray.setFromCamera({ x: 0, y: 0 }, cam);
+          const labels = Array.from(document.querySelectorAll('.ar-label')).map(e => e.object3D);
+          const meshes = [];
+          labels.forEach(o => o.traverse(n => { if (n.isMesh) { n.userData.elData = o.el.dataset; meshes.push(n); } }));
+          const hits = ray.intersectObjects(meshes, true);
+          if (hits.length) {
+            const d = hits[0].object.userData.elData;
+            return { name: d.name, info: d.info };
+          }
+          return null;
+        },
+
+        showPopup: function (data) {
+          this.popupTitle.textContent = data.name;
+          this.popupBody.textContent = data.info;
+          this.popup.style.display = 'block';
+        },
+
+        placeObject: function () {
+          const place = this.places[this.placeIndex % this.places.length];
+          this.placeIndex++;
+          const pos = this.reticle.object3D.position;
+
+          // wrapper
+          const wrap = document.createElement('a-entity');
+          wrap.setAttribute('position', pos.x + ' ' + pos.y + ' ' + pos.z);
+
+          // cube orange
+          const cube = document.createElement('a-box');
+          cube.setAttribute('width', '0.2');
+          cube.setAttribute('height', '0.2');
+          cube.setAttribute('depth', '0.2');
+          cube.setAttribute('position', '0 0.1 0');
+          cube.setAttribute('material', 'color: #D85A30');
+          wrap.appendChild(cube);
+
+          // label billboard di ujung atas cube
+          const label = document.createElement('a-entity');
+          label.classList.add('ar-label');
+          label.dataset.name = place.name;
+          label.dataset.info = place.info;
+          label.setAttribute('position', '0 0.35 0');
+          label.setAttribute('billboard', '');
+
+          const bg = document.createElement('a-plane');
+          bg.setAttribute('width', '0.4');
+          bg.setAttribute('height', '0.12');
+          bg.setAttribute('material', 'color: #185FA5; shader: flat; opacity: 0.95');
+          label.appendChild(bg);
+
+          const txt = document.createElement('a-text');
+          txt.setAttribute('value', place.name);
+          txt.setAttribute('align', 'center');
+          txt.setAttribute('color', '#FFFFFF');
+          txt.setAttribute('width', '1');
+          txt.setAttribute('position', '0 0 0.001');
+          label.appendChild(txt);
+
+          wrap.appendChild(label);
+          this.el.appendChild(wrap);
+          this.hint.textContent = place.name + ' ditaruh. Arahkan tengah layar ke label lalu tap untuk info.';
+        },
+
+        tick: function () {
+          const frame = this.el.sceneEl.frame;
+          if (!frame || !this.hitTestSource) return;
+          const results = frame.getHitTestResults(this.hitTestSource);
+          if (results.length) {
+            const pose = results[0].getPose(this.refSpace);
+            this.reticle.setAttribute('visible', true);
+            this.reticle.object3D.position.set(
+              pose.transform.position.x,
+              pose.transform.position.y,
+              pose.transform.position.z
+            );
+          } else {
+            this.reticle.setAttribute('visible', false);
+          }
+        }
+      });
+    }
+    registerComponents();
+  </script>
   <style>
-    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #f4f4f2; }
-    model-viewer {
-      width: 100vw; height: 100vh; background: #f4f4f2;
-      --poster-color: #f4f4f2;
-    }
-    #ar-btn {
-      position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
-      padding: 14px 28px; border: none; border-radius: 999px;
-      background: #185FA5; color: #fff; font-size: 16px; font-weight: 500;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-    #note {
-      position: absolute; top: 16px; left: 0; right: 0; text-align: center;
-      font-size: 13px; color: #444;
-    }
-    #note span { background: rgba(255,255,255,0.85); padding: 6px 14px; border-radius: 999px; }
+    body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
+    #ui { position: fixed; top: 0; left: 0; right: 0; z-index: 10; padding: 16px; text-align: center; pointer-events: none; }
+    #hint { display: inline-block; background: rgba(0,0,0,0.65); color: #fff; padding: 10px 18px; border-radius: 999px; font-size: 14px; }
+    #enter { position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 10; padding: 14px 28px; border: none; border-radius: 999px; background: #185FA5; color: #fff; font-size: 16px; font-weight: 500; }
+    #crosshair { position: fixed; top: 50%; left: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border: 2px solid rgba(255,255,255,0.8); border-radius: 50%; z-index: 9; pointer-events: none; }
+    #popup { display: none; position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); z-index: 20; width: 80%; max-width: 320px; background: rgba(255,255,255,0.97); border-radius: 14px; padding: 16px 18px; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+    #popup h3 { margin: 0 0 8px; font-size: 17px; }
+    #popup p { margin: 0; font-size: 14px; color: #333; line-height: 1.5; }
+    #popup-close { position: absolute; top: 8px; right: 12px; border: none; background: none; font-size: 20px; color: #888; }
   </style>
 </head>
 <body>
-  <div id="note"><span>Putar model dengan jari. Tekan "Lihat di ruangan" untuk mode AR.</span></div>
+  <div id="ui"><span id="hint">Tekan "Mulai AR", lalu arahkan kamera ke lantai…</span></div>
+  <div id="crosshair"></div>
+  <button id="enter">Mulai AR</button>
 
-  <model-viewer
-    id="mv"
-    src="cube.glb"
-    ios-src="cube.usdz"
-    alt="Kubus AR"
-    ar
-    ar-modes="webxr scene-viewer quick-look"
-    ar-scale="fixed"
-    camera-controls
-    touch-action="pan-y"
-    shadow-intensity="1"
-    auto-rotate>
-    <button id="ar-btn" slot="ar-button">Lihat di ruangan</button>
-  </model-viewer>
+  <div id="popup">
+    <button id="popup-close">&times;</button>
+    <h3 id="popup-title"></h3>
+    <p id="popup-body"></p>
+  </div>
 
-  <script>
-    const mv = document.getElementById('mv');
-    const note = document.querySelector('#note span');
-    mv.addEventListener('ar-status', (e) => {
-      if (e.detail.status === 'failed') {
-        note.textContent = 'Mode AR gagal dibuka di perangkat ini.';
-      } else if (e.detail.status === 'session-started') {
-        note.textContent = 'Sapukan kamera ke lantai, lalu ketuk untuk menaruh.';
-      }
-    });
-  </script>
+  <a-scene
+    ar-controller
+    webxr="optionalFeatures: hit-test,local-floor;"
+    renderer="colorManagement: true;"
+    vr-mode-ui="enabled: false">
+
+    <a-entity id="reticle" visible="false"
+      geometry="primitive: ring; radiusInner: 0.07; radiusOuter: 0.1"
+      material="color: #1D9E75; shader: flat; opacity: 0.9"
+      rotation="-90 0 0"></a-entity>
+
+    <a-entity light="type: ambient; intensity: 0.9"></a-entity>
+    <a-entity light="type: directional; intensity: 0.6" position="1 2 1"></a-entity>
+    <a-camera></a-camera>
+  </a-scene>
 </body>
 </html>
