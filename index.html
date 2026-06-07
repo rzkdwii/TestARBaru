@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>WebAR Kampus Cibiru</title>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: #f4f4f2; }
+    model-viewer {
+      width: 100vw; height: 100vh; background: #f4f4f2;
+      --poster-color: #f4f4f2;
+    }
+    #ar-btn {
+      position: absolute; bottom: 32px; left: 50%; transform: translateX(-50%);
+      padding: 14px 28px; border: none; border-radius: 999px;
+      background: #185FA5; color: #fff; font-size: 16px; font-weight: 500;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    #note {
+      position: absolute; top: 16px; left: 0; right: 0; text-align: center;
+      font-size: 13px; color: #444;
+    }
+    #note span { background: rgba(255,255,255,0.85); padding: 6px 14px; border-radius: 999px; }
+  </style>
+</head>
+<body>
+  <div id="note"><span>Putar model dengan jari. Tekan "Lihat di ruangan" untuk mode AR.</span></div>
+
+  <model-viewer
+    id="mv"
+    src="cube.glb"
+    alt="Kubus AR"
+    ar
+    ar-modes="webxr scene-viewer quick-look"
+    ar-scale="fixed"
+    camera-controls
+    touch-action="pan-y"
+    shadow-intensity="1"
+    auto-rotate>
+    <button id="ar-btn" slot="ar-button">Lihat di ruangan</button>
+  </model-viewer>
+
+  <script>
+    const mv = document.getElementById('mv');
+    const note = document.querySelector('#note span');
+    mv.addEventListener('ar-status', (e) => {
+      if (e.detail.status === 'failed') {
+        note.textContent = 'Mode AR gagal dibuka di perangkat ini.';
+      } else if (e.detail.status === 'session-started') {
+        note.textContent = 'Sapukan kamera ke lantai, lalu ketuk untuk menaruh.';
+      }
+    });
+  </script>
+</body>
+</html>
